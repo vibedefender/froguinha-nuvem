@@ -1,0 +1,33 @@
+name: render
+# Render do Froguinha (22/11/2026). Repositório PÚBLICO temporário: a fonte e as partes vão TRANCADAS (AES-256 com uma chave
+# nova a cada vídeo, guardada só no cofre de segredos do GitHub e apagada no fim). O PC apaga release, execução e chave depois.
+on:
+  workflow_dispatch:
+    inputs:
+      tag: { required: true }
+      partes: { required: true }
+permissions: { contents: read, actions: write }
+jobs:
+  parte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy: { fail-fast: false, matrix: { parte: '${{ fromJSON(inputs.partes) }}' } }
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get -qq update >/dev/null && sudo apt-get -qq install -y ffmpeg >/dev/null
+      - name: fontes
+        env: { GH_TOKEN: '${{ github.token }}', CHAVE: '${{ secrets.CHAVE }}' }
+        run: |
+          mkdir -p f && gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -D f -p '*.bin.p*'
+          for base in $(ls f | sed -n 's/\.bin\.p[0-9]*$//p' | sort -u); do cat $(ls f/$base.bin.p* | sort) > "f/$base.bin" && rm f/$base.bin.p*; done
+          for x in f/*.bin; do n=$(basename "$x" .bin); iv=$(printf '%s' "$n" | sha256sum | cut -c1-32)
+            openssl enc -d -aes-256-ctr -K "$CHAVE" -iv "$iv" -in "$x" -out "f/$n.mp4" && rm "$x"; done
+      - name: render
+        run: node parte.mjs plano.json ${{ matrix.parte }} out.mp4 $(ls f/fonte-*.mp4 | sort -V)
+      - name: trancar
+        env: { CHAVE: '${{ secrets.CHAVE }}' }
+        run: |
+          n=parte-${{ matrix.parte }}; iv=$(printf '%s' "$n" | sha256sum | cut -c1-32)
+          openssl enc -aes-256-ctr -K "$CHAVE" -iv "$iv" -in out.mp4 -out "$n.bin" && rm out.mp4
+      - uses: actions/upload-artifact@v4
+        with: { name: 'parte-${{ matrix.parte }}', path: 'parte-${{ matrix.parte }}.bin', retention-days: 1, compression-level: 0 }
